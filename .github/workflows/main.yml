@@ -81,10 +81,10 @@ jobs:
         run: |
           echo "ap_tar=$(find . -type f -name 'AP*.tar.md5' | head -n 1)" >> $GITHUB_ENV
 
-      - name: Extract images
+      - name: Extract Images
         if: env.need_update == '1'
         run: |
-          mkdir -p images/${{ matrix.model }}
+          mkdir -p Images/${{ matrix.model }}
 
           wget -O simg2img https://raw.githubusercontent.com/DumprX/DumprX/main/utils/bin/simg2img
           wget -O lpunpack https://raw.githubusercontent.com/DumprX/DumprX/main/utils/lpunpack
@@ -95,7 +95,7 @@ jobs:
               echo "Found ${img}.img.lz4, extracting..."
               tar xvf "${{ env.ap_tar }}" --wildcards "${img}.img.lz4"
               lz4 -d "${img}.img.lz4" "${img}.img"
-              mv "${img}.img" images/${{ matrix.model }}
+              mv "${img}.img" Images/${{ matrix.model }}
               rm "${img}.img.lz4"
             else
               echo "${img}.img.lz4 not found in ${{ env.ap_tar }}, skipping."
@@ -119,12 +119,12 @@ jobs:
             [ -f system_dlkm_a.img ] && mv system_dlkm_a.img system_dlkm.img
             [ -f vendor_dlkm_a.img ] && mv vendor_dlkm_a.img vendor_dlkm.img
 
-            [ -f system_dlkm.img ] && mv system_dlkm.img images/${{ matrix.model }}
-            [ -f vendor_dlkm.img ] && mv vendor_dlkm.img images/${{ matrix.model }}
+            [ -f system_dlkm.img ] && mv system_dlkm.img Images/${{ matrix.model }}
+            [ -f vendor_dlkm.img ] && mv vendor_dlkm.img Images/${{ matrix.model }}
 
             rm -f super.img.raw
           else
-            echo "super.img.lz4 not found, skipping super image extraction."
+            echo "super.img.lz4 not found, skipping super Image extraction."
           fi
 
       - name: Setup Git credentials
@@ -134,10 +134,10 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}
 
-      - name: Upload images
+      - name: Upload Images
         if: env.need_update == '1'
         run: |
           git pull origin $(echo "${GITHUB_REF#refs/heads/}")
           git add versions/current.${{ matrix.model }}_${{ matrix.omc }} Images/${{ matrix.model }}
-          git commit -m "Upload ${{ matrix.model }} images and update version" || echo "Nothing to commit"
+          git commit -m "Upload ${{ matrix.model }} Images and update version" || echo "Nothing to commit"
           git push origin HEAD:$(echo "${GITHUB_REF#refs/heads/}")
