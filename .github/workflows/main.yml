@@ -1,0 +1,143 @@
+## This File is based on:
+## https://github.com/Mesa-Labs-Archive/proprietary_vendor_samsung_a54x/blob/main/.github/workflows/check.yml
+## https://github.com/Vaz15k/literate-potato/blob/master/.github/workflows/main.yml
+
+name: Upload firmware images
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 12 * * *"
+
+permissions:
+  contents: write
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - model: "SM-A556E"
+            csc: "XME"
+            omc: "XME"
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Compare latest version with current version
+        run: |
+          need_update=0
+          latest=$(curl --retry 5 --retry-delay 5 http://fota-cloud-dn.ospserver.net/firmware/${{ matrix.csc }}/${{ matrix.model }}/version.xml | grep latest | sed 's/^[^>]*>//' | sed 's/<.*//')
+          current=$(cat versions/current.${{ matrix.model }}_${{ matrix.omc }} 2>/dev/null) || need_update=1
+          [[ "$latest" != "$current" ]] && need_update=1
+          mkdir -p versions
+          echo "$latest" > versions/current.${{ matrix.model }}_${{ matrix.omc }}
+          echo "need_update=$need_update" >> $GITHUB_ENV
+
+      - name: Set up Node.js
+        if: env.need_update == '1'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 'latest'
+
+      - name: Set up Python 3
+        if: env.need_update == '1'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install dependencies
+        if: env.need_update == '1'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y liblz4-tool zip f2fs-tools
+          sudo wget -O /usr/bin/samfirm https://github.com/DavidArsene/samfirm.js/releases/download/v0.3.0/samfirm.js
+          sudo chmod +x /usr/bin/samfirm
+
+      - name: Cleanup space
+        if: env.need_update == '1'
+        run: |
+          sudo apt-get remove --purge -y "php*" "dotnet*" "mysql*" "clang*" "google*"
+          sudo apt-get autoremove -y
+          sudo apt-get clean
+          sudo rm -rf /usr/local
+
+      - name: Fetch firmware
+        if: env.need_update == '1'
+        run: |
+          if [[ "${{ matrix.model }}" == "SM-A556E" ]]; then
+              imei="355326621234566"
+          fi
+          samfirm -m ${{ matrix.model }} -r ${{ matrix.csc }} -i $imei
+
+      - name: Get path of files
+        if: env.need_update == '1'
+        run: |
+          echo "ap_tar=$(find . -type f -name 'AP*.tar.md5' | head -n 1)" >> $GITHUB_ENV
+
+      - name: Extract images
+        if: env.need_update == '1'
+        run: |
+          mkdir -p images/${{ matrix.model }}
+
+          wget -O simg2img https://raw.githubusercontent.com/DumprX/DumprX/main/utils/bin/simg2img
+          wget -O lpunpack https://raw.githubusercontent.com/DumprX/DumprX/main/utils/lpunpack
+          chmod +x simg2img lpunpack
+
+          for img in boot init_boot vendor_boot; do
+            if tar -tf "${{ env.ap_tar }}" | grep -q "${img}.img.lz4"; then
+              echo "Found ${img}.img.lz4, extracting..."
+              tar xvf "${{ env.ap_tar }}" --wildcards "${img}.img.lz4"
+              lz4 -d "${img}.img.lz4" "${img}.img"
+              mv "${img}.img" images/${{ matrix.model }}
+              rm "${img}.img.lz4"
+            else
+              echo "${img}.img.lz4 not found in ${{ env.ap_tar }}, skipping."
+            fi
+          done
+
+          if tar -tf "${{ env.ap_tar }}" | grep -q "super.img.lz4"; then
+            echo "Found super.img.lz4, extracting..."
+            tar xvf "${{ env.ap_tar }}" --wildcards "super.img.lz4"
+            lz4 -d super.img.lz4 super.img
+            rm super.img.lz4
+
+            echo "Converting to RAW super.img.raw..."
+            ./simg2img super.img super.img.raw
+            rm super.img
+
+            echo "Unpacking partitions from super.img.raw..."
+            ./lpunpack --partition=system_dlkm_a super.img.raw || ./lpunpack --partition=system_dlkm super.img.raw
+            ./lpunpack --partition=vendor_dlkm_a super.img.raw || ./lpunpack --partition=vendor_dlkm super.img.raw
+
+            [ -f system_dlkm_a.img ] && mv system_dlkm_a.img system_dlkm.img
+            [ -f vendor_dlkm_a.img ] && mv vendor_dlkm_a.img vendor_dlkm.img
+
+            [ -f system_dlkm.img ] && mv system_dlkm.img images/${{ matrix.model }}
+            [ -f vendor_dlkm.img ] && mv vendor_dlkm.img images/${{ matrix.model }}
+
+            rm -f super.img.raw
+          else
+            echo "super.img.lz4 not found, skipping super image extraction."
+          fi
+
+      - name: Setup Git credentials
+        if: env.need_update == '1'
+        run: |
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+          git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}
+
+      - name: Upload images
+        if: env.need_update == '1'
+        run: |
+          git pull origin $(echo "${GITHUB_REF#refs/heads/}")
+          git add versions/current.${{ matrix.model }}_${{ matrix.omc }} Images/${{ matrix.model }}
+          git commit -m "Upload ${{ matrix.model }} images and update version" || echo "Nothing to commit"
+          git push origin HEAD:$(echo "${GITHUB_REF#refs/heads/}")

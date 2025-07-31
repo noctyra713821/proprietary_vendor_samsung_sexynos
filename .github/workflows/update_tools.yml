@@ -1,0 +1,115 @@
+name: Update Modification Tools
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 0 * * *"  # Run daily at midnight
+
+permissions:
+  contents: write
+
+jobs:
+  update-tools:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Create required directories
+        run: |
+          mkdir -p Tools
+          mkdir -p versions
+
+      - name: Check current Magisk version
+        run: |
+          need_update_magisk=0
+          if [ -f versions/current.magiskboot ]; then
+            current_magisk=$(cat versions/current.magiskboot)
+            echo "current_magisk=$current_magisk" >> $GITHUB_ENV
+          else
+            need_update_magisk=1
+          fi
+          echo "need_update_magisk=$need_update_magisk" >> $GITHUB_ENV
+
+      - name: Get latest Magisk version
+        run: |
+          latest_magisk=$(curl -s https://api.github.com/repos/topjohnwu/Magisk/releases/latest | jq -r '.tag_name')
+          echo "latest_magisk=$latest_magisk" >> $GITHUB_ENV
+          if [[ "$latest_magisk" != "${{ env.current_magisk }}" ]]; then
+            echo "need_update_magisk=1" >> $GITHUB_ENV
+          fi
+
+      - name: Download and extract magiskboot
+        if: env.need_update_magisk == '1'
+        run: |
+          wget -q https://github.com/topjohnwu/Magisk/releases/download/${{ env.latest_magisk }}/Magisk-${{ env.latest_magisk }}.apk -O magisk.apk
+
+          mkdir -p temp_magisk
+          unzip -j magisk.apk "lib/x86_64/libmagiskboot.so" -d temp_magisk
+          mv temp_magisk/libmagiskboot.so Tools/magiskboot
+          chmod +x Tools/magiskboot
+
+          unzip -j magisk.apk "lib/arm64-v8a/libmagiskboot.so" -d temp_magisk
+          mv temp_magisk/libmagiskboot.so Tools/magiskboot_android
+          chmod +x Tools/magiskboot_android
+
+          rm -rf temp_magisk magisk.apk
+          echo "${{ env.latest_magisk }}" > versions/current.magiskboot
+
+      - name: Check current KernelSU version
+        run: |
+          need_update_ksud=0
+          if [ -f versions/current.ksud ]; then
+            current_ksud=$(cat versions/current.ksud)
+            echo "current_ksud=$current_ksud" >> $GITHUB_ENV
+          else
+            need_update_ksud=1
+          fi
+          echo "need_update_ksud=$need_update_ksud" >> $GITHUB_ENV
+
+      - name: Get latest KernelSU version
+        run: |
+          latest_ksud=$(curl -s https://api.github.com/repos/tiann/KernelSU/releases/latest | jq -r '.tag_name')
+          echo "latest_ksud=$latest_ksud" >> $GITHUB_ENV
+          if [[ "$latest_ksud" != "${{ env.current_ksud }}" ]]; then
+            echo "need_update_ksud=1" >> $GITHUB_ENV
+          fi
+
+      - name: Download ksud
+        if: env.need_update_ksud == '1'
+        run: |
+          wget -q https://github.com/tiann/KernelSU/releases/download/${{ env.latest_ksud }}/ksud-aarch64-linux-android -O Tools/ksud_android
+          chmod +x Tools/ksud_android
+
+          wget -q https://github.com/tiann/KernelSU/releases/download/${{ env.latest_ksud }}/ksud-x86_64-unknown-linux-musl -O Tools/ksud
+          chmod +x Tools/ksud
+
+          echo "${{ env.latest_ksud }}" > versions/current.ksud
+
+      - name: Setup Git credentials
+        if: env.need_update_magisk == '1' || env.need_update_ksud == '1'
+        run: |
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+          git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}
+
+      - name: Commit changes
+        if: env.need_update_magisk == '1' || env.need_update_ksud == '1'
+        run: |
+          branch_name=$(echo "${GITHUB_REF#refs/heads/}")
+          git pull origin "$branch_name"
+
+          if [[ "${{ env.need_update_magisk }}" == "1" ]]; then
+            git add Tools/magiskboot Tools/magiskboot_android versions/current.magiskboot
+            git commit -m "Update magiskboot to version ${{ env.latest_magisk }}" || echo "Nothing to commit for Magisk"
+          fi
+
+          if [[ "${{ env.need_update_ksud }}" == "1" ]]; then
+            git add Tools/ksud Tools/ksud_android versions/current.ksud
+            git commit -m "Update ksud to version ${{ env.latest_ksud }}" || echo "Nothing to commit for ksud"
+          fi
+
+          git push origin HEAD:"$branch_name"
